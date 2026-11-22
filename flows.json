@@ -1,0 +1,374 @@
+[
+    {
+        "id": "flow_iot_bima",
+        "type": "tab",
+        "label": "IoT REST API + WS + SQLite",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "mqtt_broker_cfg",
+        "type": "mqtt-broker",
+        "name": "Local Mosquitto",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "node-red-backend-bima",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true
+    },
+    {
+        "id": "sqlite_db_cfg",
+        "type": "sqlitedb",
+        "db": "D:/latihan_iot_pyton/iot_history.db",
+        "mode": "RWC"
+    },
+    {
+        "id": "ws_listener_cfg",
+        "type": "websocket-listener",
+        "path": "/ws/sensor",
+        "wholemsg": "false"
+    },
+    {
+        "id": "init_inject",
+        "type": "inject",
+        "z": "flow_iot_bima",
+        "name": "Init SQLite Table",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 150,
+        "y": 60,
+        "wires": [
+            [
+                "init_sql_fn"
+            ]
+        ]
+    },
+    {
+        "id": "init_sql_fn",
+        "type": "function",
+        "z": "flow_iot_bima",
+        "name": "Query Create Table",
+        "func": "msg.topic = 'CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, suhu REAL, kelembaban REAL, timestamp TEXT, received TEXT);';\nreturn msg;",
+        "outputs": 1,
+        "x": 380,
+        "y": 60,
+        "wires": [
+            [
+                "init_sqlite"
+            ]
+        ]
+    },
+    {
+        "id": "init_sqlite",
+        "type": "sqlite",
+        "z": "flow_iot_bima",
+        "mydb": "sqlite_db_cfg",
+        "sqlquery": "msg.topic",
+        "sql": "",
+        "name": "iot_history.db",
+        "x": 600,
+        "y": 60,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "mqtt_in_sensor",
+        "type": "mqtt in",
+        "z": "flow_iot_bima",
+        "name": "Subscribe Sensor",
+        "topic": "iot/sensor",
+        "qos": "0",
+        "datatype": "json",
+        "broker": "mqtt_broker_cfg",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 140,
+        "y": 140,
+        "wires": [
+            [
+                "fn_process_sensor"
+            ]
+        ]
+    },
+    {
+        "id": "fn_process_sensor",
+        "type": "function",
+        "z": "flow_iot_bima",
+        "name": "Cek Threshold & Siapkan Data",
+        "func": "const suhu = Number(msg.payload.suhu);\nconst kelembaban = Number(msg.payload.kelembaban);\nconst timestamp = msg.payload.timestamp || new Date().toISOString();\nconst received = new Date().toISOString();\nconst threshold = flow.get('batas_suhu') !== undefined ? Number(flow.get('batas_suhu')) : 30;\nconst alert = suhu > threshold;\n\nconst sensorData = { suhu, kelembaban, timestamp, received, threshold, alert };\nflow.set('latest_sensor', sensorData);\n\nconst wsMsg = { payload: JSON.stringify(sensorData) };\nconst dbMsg = {\n    topic: 'INSERT INTO history (suhu, kelembaban, timestamp, received) VALUES ($suhu, $kelembaban, $timestamp, $received);',\n    payload: {\n        $suhu: suhu,\n        $kelembaban: kelembaban,\n        $timestamp: timestamp,\n        $received: received\n    }\n};\nreturn [wsMsg, dbMsg];",
+        "outputs": 2,
+        "x": 390,
+        "y": 140,
+        "wires": [
+            [
+                "ws_out_sensor"
+            ],
+            [
+                "sqlite_insert"
+            ]
+        ]
+    },
+    {
+        "id": "ws_out_sensor",
+        "type": "websocket out",
+        "z": "flow_iot_bima",
+        "name": "Broadcast WebSocket",
+        "server": "ws_listener_cfg",
+        "client": "",
+        "x": 660,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "sqlite_insert",
+        "type": "sqlite",
+        "z": "flow_iot_bima",
+        "mydb": "sqlite_db_cfg",
+        "sqlquery": "msg.topic",
+        "sql": "",
+        "name": "Simpan ke SQLite",
+        "x": 650,
+        "y": 180,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "http_get_suhu",
+        "type": "http in",
+        "z": "flow_iot_bima",
+        "name": "GET /api/suhu",
+        "url": "/api/suhu",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 130,
+        "y": 260,
+        "wires": [
+            [
+                "fn_get_suhu"
+            ]
+        ]
+    },
+    {
+        "id": "fn_get_suhu",
+        "type": "function",
+        "z": "flow_iot_bima",
+        "name": "Auth + Latest Sensor",
+        "func": "msg.headers = { 'Access-Control-Allow-Origin': '*' };\nif (msg.req.headers['x-api-key'] !== 'bima-iot-key-2026') {\n    msg.statusCode = 401;\n    msg.payload = { status: 'error', message: 'Unauthorized: X-API-Key tidak valid' };\n    return msg;\n}\nconst data = flow.get('latest_sensor') || { suhu: null, kelembaban: null, threshold: flow.get('batas_suhu') ?? 30, alert: false };\nmsg.payload = { status: 'success', data: data, server_time: new Date().toISOString() };\nreturn msg;",
+        "outputs": 1,
+        "x": 380,
+        "y": 260,
+        "wires": [
+            [
+                "http_resp_main"
+            ]
+        ]
+    },
+    {
+        "id": "http_get_history",
+        "type": "http in",
+        "z": "flow_iot_bima",
+        "name": "GET /api/history",
+        "url": "/api/history",
+        "method": "get",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 140,
+        "y": 340,
+        "wires": [
+            [
+                "fn_auth_history"
+            ]
+        ]
+    },
+    {
+        "id": "fn_auth_history",
+        "type": "function",
+        "z": "flow_iot_bima",
+        "name": "Auth + Query SQLite",
+        "func": "msg.headers = { 'Access-Control-Allow-Origin': '*' };\nif (msg.req.headers['x-api-key'] !== 'bima-iot-key-2026') {\n    msg.statusCode = 401;\n    msg.payload = { status: 'error', message: 'Unauthorized: X-API-Key tidak valid' };\n    return [null, msg];\n}\nmsg.topic = 'SELECT id, suhu, kelembaban, timestamp, received FROM history ORDER BY id DESC LIMIT 15;';\nreturn [msg, null];",
+        "outputs": 2,
+        "x": 380,
+        "y": 340,
+        "wires": [
+            [
+                "sqlite_get_history"
+            ],
+            [
+                "http_resp_main"
+            ]
+        ]
+    },
+    {
+        "id": "sqlite_get_history",
+        "type": "sqlite",
+        "z": "flow_iot_bima",
+        "mydb": "sqlite_db_cfg",
+        "sqlquery": "msg.topic",
+        "sql": "",
+        "name": "Ambil History",
+        "x": 600,
+        "y": 320,
+        "wires": [
+            [
+                "fn_format_history"
+            ]
+        ]
+    },
+    {
+        "id": "fn_format_history",
+        "type": "function",
+        "z": "flow_iot_bima",
+        "name": "Format JSON",
+        "func": "const rows = Array.isArray(msg.payload) ? msg.payload.reverse() : [];\nmsg.payload = { status: 'success', count: rows.length, data: rows };\nreturn msg;",
+        "outputs": 1,
+        "x": 790,
+        "y": 320,
+        "wires": [
+            [
+                "http_resp_main"
+            ]
+        ]
+    },
+    {
+        "id": "http_post_kontrol",
+        "type": "http in",
+        "z": "flow_iot_bima",
+        "name": "POST /api/kontrol",
+        "url": "/api/kontrol",
+        "method": "post",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 140,
+        "y": 420,
+        "wires": [
+            [
+                "fn_post_kontrol"
+            ]
+        ]
+    },
+    {
+        "id": "fn_post_kontrol",
+        "type": "function",
+        "z": "flow_iot_bima",
+        "name": "Auth + Publish Kontrol",
+        "func": "msg.headers = { 'Access-Control-Allow-Origin': '*' };\nif (msg.req.headers['x-api-key'] !== 'bima-iot-key-2026') {\n    msg.statusCode = 401;\n    msg.payload = { status: 'error', message: 'Unauthorized: X-API-Key tidak valid' };\n    return [msg, null];\n}\nconst body = msg.payload || {};\nif (!body.device || !body.action) {\n    msg.statusCode = 400;\n    msg.payload = { status: 'error', message: 'Parameter device dan action wajib diisi' };\n    return [msg, null];\n}\nconst mqttMsg = {\n    topic: 'iot/kontrol',\n    payload: JSON.stringify({ device: body.device, action: body.action, timestamp: new Date().toISOString() })\n};\nmsg.payload = { status: 'success', message: 'Perintah ' + body.device + ' -> ' + body.action + ' terkirim' };\nreturn [msg, mqttMsg];",
+        "outputs": 2,
+        "x": 380,
+        "y": 420,
+        "wires": [
+            [
+                "http_resp_main"
+            ],
+            [
+                "mqtt_out_kontrol"
+            ]
+        ]
+    },
+    {
+        "id": "mqtt_out_kontrol",
+        "type": "mqtt out",
+        "z": "flow_iot_bima",
+        "name": "Publish Kontrol",
+        "topic": "iot/kontrol",
+        "qos": "0",
+        "retain": "false",
+        "respPop": "",
+        "broker": "mqtt_broker_cfg",
+        "x": 640,
+        "y": 440,
+        "wires": []
+    },
+    {
+        "id": "http_put_threshold",
+        "type": "http in",
+        "z": "flow_iot_bima",
+        "name": "PUT /api/threshold",
+        "url": "/api/threshold",
+        "method": "put",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 150,
+        "y": 500,
+        "wires": [
+            [
+                "fn_put_threshold"
+            ]
+        ]
+    },
+    {
+        "id": "fn_put_threshold",
+        "type": "function",
+        "z": "flow_iot_bima",
+        "name": "Auth + Set Threshold",
+        "func": "msg.headers = { 'Access-Control-Allow-Origin': '*' };\nif (msg.req.headers['x-api-key'] !== 'bima-iot-key-2026') {\n    msg.statusCode = 401;\n    msg.payload = { status: 'error', message: 'Unauthorized: X-API-Key tidak valid' };\n    return msg;\n}\nconst val = Number(msg.payload && msg.payload.threshold);\nif (isNaN(val)) {\n    msg.statusCode = 400;\n    msg.payload = { status: 'error', message: 'Nilai threshold harus berupa angka' };\n    return msg;\n}\nflow.set('batas_suhu', val);\nmsg.payload = { status: 'success', threshold: val, message: 'Batas suhu diatur ke ' + val + ' C' };\nreturn msg;",
+        "outputs": 1,
+        "x": 380,
+        "y": 500,
+        "wires": [
+            [
+                "http_resp_main"
+            ]
+        ]
+    },
+    {
+        "id": "http_opt_cors",
+        "type": "http in",
+        "z": "flow_iot_bima",
+        "name": "OPTIONS /api/*",
+        "url": "/api/*",
+        "method": "options",
+        "upload": false,
+        "swaggerDoc": "",
+        "x": 140,
+        "y": 580,
+        "wires": [
+            [
+                "fn_opt_cors"
+            ]
+        ]
+    },
+    {
+        "id": "fn_opt_cors",
+        "type": "function",
+        "z": "flow_iot_bima",
+        "name": "CORS Preflight",
+        "func": "msg.headers = {\n    'Access-Control-Allow-Origin': '*',\n    'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',\n    'Access-Control-Allow-Headers': 'Content-Type, X-API-Key'\n};\nmsg.statusCode = 204;\nmsg.payload = '';\nreturn msg;",
+        "outputs": 1,
+        "x": 360,
+        "y": 580,
+        "wires": [
+            [
+                "http_resp_main"
+            ]
+        ]
+    },
+    {
+        "id": "http_resp_main",
+        "type": "http response",
+        "z": "flow_iot_bima",
+        "name": "API Response",
+        "statusCode": "",
+        "headers": {},
+        "x": 960,
+        "y": 420,
+        "wires": []
+    }
+]
